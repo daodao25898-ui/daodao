@@ -4,3 +4,5 @@ python-multipart==0.0.20
 openai==1.65.2
 pydantic==2.10.6
 pytest==8.3.4
+opencv-python==4.11.0.86
+pytesseract==0.3.13
