@@ -19,6 +19,7 @@ from typing import Dict, List, Tuple
 
 import cv2
 import pytesseract
+from pytesseract import TesseractError
 
 
 @dataclass
@@ -32,10 +33,35 @@ class TextHit:
 
 
 class VideoTextDetector:
-    def __init__(self, video_path: str, sample_every: int = 12, min_conf: float = 45.0):
+    def __init__(
+        self,
+        video_path: str,
+        sample_every: int = 12,
+        min_conf: float = 45.0,
+        ocr_lang: str | None = None,
+    ):
         self.video_path = video_path
         self.sample_every = max(1, sample_every)
         self.min_conf = min_conf
+        self.ocr_lang = ocr_lang
+
+    @staticmethod
+    def _resolve_ocr_lang(preferred: str | None) -> str | None:
+        """选择可用 OCR 语言，避免因语言包缺失直接报错。"""
+        if preferred:
+            return preferred
+        try:
+            available = set(pytesseract.get_languages(config=""))
+        except TesseractError:
+            return None
+
+        if {"chi_sim", "eng"}.issubset(available):
+            return "chi_sim+eng"
+        if "eng" in available:
+            return "eng"
+        if available:
+            return "+".join(sorted(available))
+        return None
 
     def _ocr_frame(self, frame, frame_idx: int, fps: float) -> List[TextHit]:
         h, w = frame.shape[:2]
@@ -43,12 +69,15 @@ class VideoTextDetector:
         gray = cv2.GaussianBlur(gray, (3, 3), 0)
         _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        data = pytesseract.image_to_data(
-            bw,
-            output_type=pytesseract.Output.DICT,
-            config="--oem 3 --psm 6",
-            lang="chi_sim+eng",
-        )
+        kwargs = {
+            "output_type": pytesseract.Output.DICT,
+            "config": "--oem 3 --psm 6",
+        }
+        lang = self._resolve_ocr_lang(self.ocr_lang)
+        if lang:
+            kwargs["lang"] = lang
+
+        data = pytesseract.image_to_data(bw, **kwargs)
 
         hits: List[TextHit] = []
         for i, txt in enumerate(data["text"]):
@@ -163,10 +192,20 @@ def main():
     parser.add_argument("video", help="视频路径")
     parser.add_argument("--sample-every", type=int, default=12, help="每隔多少帧采样一次")
     parser.add_argument("--min-conf", type=float, default=45.0, help="OCR 最低置信度")
+    parser.add_argument(
+        "--ocr-lang",
+        default=None,
+        help="OCR 语言（如 chi_sim+eng）；不传时自动根据已安装语言包回退",
+    )
     parser.add_argument("--json", action="store_true", help="仅输出 JSON")
     args = parser.parse_args()
 
-    detector = VideoTextDetector(args.video, sample_every=args.sample_every, min_conf=args.min_conf)
+    detector = VideoTextDetector(
+        args.video,
+        sample_every=args.sample_every,
+        min_conf=args.min_conf,
+        ocr_lang=args.ocr_lang,
+    )
     result = detector.detect()
 
     if args.json:
